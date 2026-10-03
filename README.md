@@ -25,7 +25,7 @@ A lightweight, single-file web dashboard that displays network connection logs a
 Open `index.html` in any browser, or visit the live demo (see below).
 
 ## Live demo (GitHub Pages)
-Repo **Settings → Pages → Deploy from branch → `main` / root**. Your site will be at `https://<your-username>.github.io/<repo-name>/`.
+Repo **Settings → Pages → Deploy from branch → `main` / root**. Your site will be at `(https://kaviyarasanbalasundaram.github.io/netwatch/)`.
 
 ## Use your own logs
 Replace `generate()` in `index.html` with a parser that fills the `events` array with records shaped like:
