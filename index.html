@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NetWatch – Network Monitor</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f5f6f8;--card:#fff;--tx:#1c2430;--mut:#6b7686;--bd:#e0e4ea;--ac:#2563eb;--bad:#dc2626;--warn:#d97706;--ok:#16a34a}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f141b;--card:#18202a;--tx:#e6ebf2;--mut:#8a96a8;--bd:#273241;--ac:#5b9bff;--bad:#f87171;--warn:#fbbf24;--ok:#4ade80}}
+:root[data-theme="dark"]{--bg:#0f141b;--card:#18202a;--tx:#e6ebf2;--mut:#8a96a8;--bd:#273241;--ac:#5b9bff;--bad:#f87171;--warn:#fbbf24;--ok:#4ade80}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:0}h2{font-size:14px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut)}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:14px}
+button,input,select{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:6px;padding:6px 10px}
+button{cursor:pointer}button.p{background:var(--ac);color:#fff;border-color:var(--ac)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px}
+.stat b{display:block;font-size:24px}.stat span{color:var(--mut);font-size:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.alert{border-left:4px solid var(--warn);padding:6px 10px;margin-bottom:6px;background:var(--bg);border-radius:4px}
+.alert.high{border-color:var(--bad)}.alert small{color:var(--mut);display:block}
+.cfg label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.cfg input{width:70px}
+.wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:720px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--bd);white-space:nowrap}
+th{color:var(--mut);font-weight:600;font-size:12px}
+tr.flag{background:color-mix(in srgb,var(--bad) 10%,transparent)}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:99px;border:1px solid var(--warn);color:var(--warn);margin-right:3px}
+.FAILED{color:var(--bad)}.SUCCESS{color:var(--ok)}.BLOCKED{color:var(--warn)}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+</style></head><body><main>
+<header><div><h1>🛰 NetWatch</h1><span style="color:var(--mut)">Simple network log monitor &amp; suspicious-activity detector (sample data)</span></div>
+<div class="bar"><button class="p" id="live">▶ Start live feed</button><button id="regen">Regenerate data</button></div></header>
+
+<div class="stats" id="stats"></div>
+
+<div class="grid">
+<div class="card"><h2>Alerts</h2><div id="alerts"></div></div>
+<div class="card cfg"><h2>Detection rules</h2>
+<label>Failed attempts from one IP ≥ <input type="number" id="tFail" value="5" min="2"></label>
+<label>Connections from one IP ≥ <input type="number" id="tRate" value="15" min="3"></label>
+<label>Distinct ports from one IP ≥ <input type="number" id="tScan" value="6" min="2"></label>
+<label>Repeats to same host:port ≥ <input type="number" id="tRep" value="8" min="2"></label>
+<p style="color:var(--mut);font-size:12px;margin:8px 0 0">Also flags: IPs outside the allow-list (192.168.0.0/16 + trusted servers) and ports outside the common set (22, 53, 80, 123, 443, 993).</p></div>
+</div>
+
+<div class="card"><h2>Connection log</h2>
+<div class="bar"><input id="q" placeholder="Search IP, host, port…"><select id="f"><option value="all">All</option><option value="flag">Flagged only</option><option value="FAILED">Failed only</option></select></div>
+<div class="wrap"><table><thead><tr><th>Time</th><th>Device</th><th>Source IP</th><th>Dest</th><th>Port</th><th>Proto</th><th>Status</th><th>Flags</th></tr></thead><tbody id="rows"></tbody></table></div></div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const COMMON=new Set([22,53,80,123,443,993]), BADPORTS=new Set([23,445,3389,4444,6667,31337]);
+const TRUSTED=new Set(['8.8.8.8','1.1.1.1','142.250.77.14','52.84.12.9']);
+const DEVICES={'192.168.1.10':'laptop-anna','192.168.1.11':'desktop-raj','192.168.1.20':'printer-01','192.168.1.30':'web-server','192.168.1.40':'nas-box'};
+let seed=42;const rnd=()=>(seed=(seed*1664525+1013904223)%4294967296)/4294967296;
+const pick=a=>a[Math.floor(rnd()*a.length)];
+let events=[],clock=Date.now()-600000,timer=null;
+const fmt=t=>new Date(t).toLocaleTimeString([], {hour12:false});
+
+function ev(src,dst,port,proto,status){clock+=Math.floor(rnd()*1500)+100;events.push({t:clock,src,dst,port,proto,status})}
+function normal(n){const ints=Object.keys(DEVICES),ext=[...TRUSTED];
+ for(let i=0;i<n;i++)ev(pick(ints),pick(ext),pick([80,443,443,443,53,53,123]),pick(['TCP','TCP','UDP']),rnd()<.95?'SUCCESS':'FAILED')}
+function attacks(){
+ for(let i=0;i<8;i++)ev('203.0.113.45','192.168.1.30',22,'TCP','FAILED');          // SSH brute force
+ [21,23,25,80,110,139,445,3389].forEach(p=>ev('198.51.100.77','192.168.1.40',p,'TCP',p==80?'SUCCESS':'BLOCKED')); // port scan
+ for(let i=0;i<18;i++)ev('192.0.2.99','192.168.1.30',443,'TCP','SUCCESS');         // flood
+ ev('192.168.1.20','45.33.12.8',4444,'TCP','SUCCESS');ev('192.168.1.20','45.33.12.8',4444,'TCP','SUCCESS'); // printer beaconing out
+ ev('192.168.1.11','10.9.8.7',6667,'TCP','FAILED');}
+function generate(){seed=Math.floor(Math.random()*1e6);events=[];clock=Date.now()-600000;
+ normal(40);attacks();normal(30);events.sort((a,b)=>a.t-b.t);render()}
+
+const isInternal=ip=>ip.startsWith('192.168.');
+const isKnown=ip=>isInternal(ip)||TRUSTED.has(ip);
+
+function analyze(){
+ const T={fail:+$('tFail').value,rate:+$('tRate').value,scan:+$('tScan').value,rep:+$('tRep').value};
+ const by={},rep={},alerts=[],flags=events.map(()=>new Set());
+ events.forEach((e,i)=>{const s=by[e.src]??={n:0,fail:0,ports:new Set(),idx:[]};
+  s.n++;if(e.status!=='SUCCESS')s.fail++;s.ports.add(e.port);s.idx.push(i);
+  const k=e.src+'>'+e.dst+':'+e.port;(rep[k]??={n:0,idx:[],e}).n++;rep[k].idx.push(i);
+  if(!isKnown(e.src)){flags[i].add('unknown src')}
+  if(!isInternal(e.dst)&&!isKnown(e.dst))flags[i].add('unknown dst');
+  if(!COMMON.has(e.port))flags[i].add(BADPORTS.has(e.port)?'risky port':'unusual port')});
+ const add=(sev,title,detail,idx,tag)=>{alerts.push({sev,title,detail});idx.forEach(i=>flags[i].add(tag))};
+ for(const [ip,s] of Object.entries(by)){
+  if(s.fail>=T.fail)add('high','Repeated failed connections',`${ip}: ${s.fail} failed/blocked attempts`,s.idx,'failures');
+  if(s.n>=T.rate)add('high','Too many connection attempts',`${ip}: ${s.n} connections in log window`,s.idx,'high rate');
+  if(s.ports.size>=T.scan)add('high','Possible port scan',`${ip} touched ${s.ports.size} distinct ports`,s.idx,'port scan');
+  if(!isKnown(ip))add('med','Unknown IP address',`${ip} is not in the allow-list (${s.n} events)`,[],'');}
+ for(const r of Object.values(rep))if(r.n>=T.rep&&r.n<100)add('med','Repeated connections',`${r.e.src} → ${r.e.dst}:${r.e.port} ×${r.n}`,r.idx,'repeat');
+ for(const r of Object.values(rep))if(BADPORTS.has(r.e.port))add('med','Suspicious port activity',`${r.e.src} → ${r.e.dst}:${r.e.port} (${r.n}×)`,[],'');
+ return {alerts,flags};
+}
+
+function render(){
+ const {alerts,flags}=analyze();
+ const uniq=new Set(events.map(e=>e.src)).size,fails=events.filter(e=>e.status!=='SUCCESS').length;
+ const flagged=flags.filter(f=>f.size).length;
+ $('stats').innerHTML=[['Events',events.length],['Unique sources',uniq],['Failed/blocked',fails],['Flagged events',flagged],['Alerts',alerts.length]]
+  .map(([l,v])=>`<div class="card stat"><b>${v}</b><span>${l}</span></div>`).join('');
+ $('alerts').innerHTML=alerts.sort((a,b)=>(a.sev=='high'?0:1)-(b.sev=='high'?0:1)).map(a=>`<div class="alert ${a.sev}"><b>${a.title}</b><small>${a.detail}</small></div>`).join('')||'<span style="color:var(--mut)">No suspicious activity detected.</span>';
+ const q=$('q').value.toLowerCase(),f=$('f').value;
+ $('rows').innerHTML=events.map((e,i)=>({e,i})).reverse().filter(({e,i})=>{
+  if(f==='flag'&&!flags[i].size)return false;if(f==='FAILED'&&e.status==='SUCCESS')return false;
+  return !q||[e.src,e.dst,e.port,DEVICES[e.src]||''].join(' ').toLowerCase().includes(q)}).slice(0,200)
+  .map(({e,i})=>`<tr class="${flags[i].size?'flag':''}"><td>${fmt(e.t)}</td><td>${DEVICES[e.src]||'<i style="color:var(--mut)">unknown</i>'}</td><td>${e.src}</td><td>${e.dst}</td><td>${e.port}</td><td>${e.proto}</td><td class="${e.status}">${e.status}</td><td>${[...flags[i]].map(x=>`<span class="tag">${x}</span>`).join('')}</td></tr>`).join('');
+}
+function tick(){clock=Date.now();const r=rnd();
+ if(r<.6)normal(1);else if(r<.8)ev('203.0.113.45','192.168.1.30',22,'TCP','FAILED');
+ else if(r<.9)ev('198.51.100.77','192.168.1.40',Math.floor(rnd()*9000)+1000,'TCP','BLOCKED');else ev('192.0.2.99','192.168.1.30',443,'TCP','SUCCESS');
+ if(events.length>400)events.shift();render()}
+$('live').onclick=()=>{if(timer){clearInterval(timer);timer=null;$('live').textContent='▶ Start live feed'}else{timer=setInterval(tick,800);$('live').textContent='⏸ Pause live feed'}};
+$('regen').onclick=generate;
+['tFail','tRate','tScan','tRep','q','f'].forEach(id=>$(id).addEventListener('input',render));
+generate();
+</script></body></html>
